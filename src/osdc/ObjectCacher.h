@@ -7,6 +7,7 @@
 #include "include/lru.h"
 #include "include/Context.h"
 #include "include/xlist.h"
+#include "include/interval_set.h"
 
 #include "common/Cond.h"
 #include "common/Finisher.h"
@@ -55,20 +56,29 @@ class ObjectCacher {
 
   typedef void (*flush_set_callback_t) (void *p, ObjectSet *oset);
 
-  // read scatter/gather  
+  typedef map<uint64_t, pair<uint64_t, uint64_t> > BufferMapping;
+
+  // read scatter/gather
   struct OSDRead {
     vector<ObjectExtent> extents;
     snapid_t snap;
-    map<object_t, bufferlist*> read_data;  // bits of data as they come back
     bufferlist *bl;
     int flags;
-    OSDRead(snapid_t s, bufferlist *b, int f) : snap(s), bl(b), flags(f) {}
+
+    map<object_t, interval_set<uint64_t> > pending_reads;
+    map<object_t, BufferMapping> buffer_mappings;
+    map<uint64_t, bufferlist> stripe_map;
+    uint64_t bytes_read;
+    int error;
+
+    OSDRead(snapid_t s, bufferlist *b, int f)
+      : snap(s), bl(b), flags(f), bytes_read(), error() {}
   };
 
   OSDRead *prepare_read(snapid_t snap, bufferlist *b, int f) {
     return new OSDRead(snap, b, f);
   }
-  
+
   // write scatter/gather  
   struct OSDWrite {
     vector<ObjectExtent> extents;
@@ -113,9 +123,9 @@ class ObjectCacher {
     utime_t last_write;
     SnapContext snapc;
     int error; // holds return value for failed reads
-    
+
     map< loff_t, list<Context*> > waitfor_read;
-    
+
     // cons
     BufferHead(Object *o) : 
       state(STATE_MISSING),
@@ -294,6 +304,7 @@ class ObjectCacher {
 
     bool is_cached(loff_t off, loff_t len);
     int map_read(OSDRead *rd,
+		 const interval_set<uint64_t> &pending_reads,
                  map<loff_t, BufferHead*>& hits,
                  map<loff_t, BufferHead*>& missing,
                  map<loff_t, BufferHead*>& rx,
@@ -449,7 +460,7 @@ class ObjectCacher {
   void bh_read(BufferHead *bh);
   void bh_write(BufferHead *bh);
 
-  void trim(uint64_t extra_space = 0);
+  void trim();
   void flush(loff_t amount=0);
 
   /**
@@ -472,6 +483,10 @@ class ObjectCacher {
 
   int _readx(OSDRead *rd, ObjectSet *oset, Context *onfinish,
 	     bool external_call);
+  uint64_t read_buffer_head(OSDRead &rd, BufferHead &bh,
+			    const BufferMapping &buffer_mapping,
+			    interval_set<uint64_t> *interval_set);
+  uint64_t assemble_read(OSDRead &rd);
 
  public:
   void bh_read_finish(int64_t poolid, sobject_t oid, ceph_tid_t tid,

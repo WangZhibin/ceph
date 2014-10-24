@@ -175,6 +175,7 @@ bool ObjectCacher::Object::is_cached(loff_t cur, loff_t left)
  * - create missing buffer_heads as necessary.
  */
 int ObjectCacher::Object::map_read(OSDRead *rd,
+				   const interval_set<uint64_t> &pending_reads,
                                    map<loff_t, BufferHead*>& hits,
                                    map<loff_t, BufferHead*>& missing,
                                    map<loff_t, BufferHead*>& rx,
@@ -184,86 +185,92 @@ int ObjectCacher::Object::map_read(OSDRead *rd,
   for (vector<ObjectExtent>::iterator ex_it = rd->extents.begin();
        ex_it != rd->extents.end();
        ++ex_it) {
-    
+
     if (ex_it->oid != oid.oid)
       continue;
 
-    ldout(oc->cct, 10) << "map_read " << ex_it->oid 
+    ldout(oc->cct, 10) << "map_read " << ex_it->oid
 		       << " " << ex_it->offset << "~" << ex_it->length
 		       << dendl;
-    
-    loff_t cur = ex_it->offset;
-    loff_t left = ex_it->length;
 
-    map<loff_t, BufferHead*>::iterator p = data_lower_bound(ex_it->offset);
-    while (left > 0) {
-      // at end?
-      if (p == data.end()) {
-        // rest is a miss.
-        BufferHead *n = new BufferHead(this);
-        n->set_start(cur);
-        n->set_length(left);
-        oc->bh_add(this, n);
-	if (complete) {
-	  oc->mark_zero(n);
-	  hits[cur] = n;
-	  ldout(oc->cct, 20) << "map_read miss+complete+zero " << left << " left, " << *n << dendl;
-	} else {
-	  missing[cur] = n;
-	  ldout(oc->cct, 20) << "map_read miss " << left << " left, " << *n << dendl;
-	}
-        cur += left;
-        assert(cur == (loff_t)ex_it->offset + (loff_t)ex_it->length);
-        break;  // no more.
-      }
-      
-      if (p->first <= cur) {
-        // have it (or part of it)
-        BufferHead *e = p->second;
+    // since the read will be retried when missing bh's are retrieved, we
+    // don't want to re-read sections that we have already successfully
+    // read
+    for (interval_set<uint64_t>::const_iterator p_it = pending_reads.begin();
+	 p_it != pending_reads.end(); ++p_it) {
+      loff_t cur = p_it.get_start();
+      loff_t left = p_it.get_len();
+      ldout(oc->cct, 20) << "map_read interval " << cur << "~" << left
+			  << dendl;
 
-        if (e->is_clean() ||
-            e->is_dirty() ||
-            e->is_tx() ||
-	    e->is_zero()) {
-          hits[cur] = e;     // readable!
-          ldout(oc->cct, 20) << "map_read hit " << *e << dendl;
-        } else if (e->is_rx()) {
-          rx[cur] = e;       // missing, not readable.
-          ldout(oc->cct, 20) << "map_read rx " << *e << dendl;
-        } else if (e->is_error()) {
-	  errors[cur] = e;
-	  ldout(oc->cct, 20) << "map_read error " << *e << dendl;
-	} else {
-	  assert(0);
-	}
-        
-        loff_t lenfromcur = MIN(e->end() - cur, left);
-        cur += lenfromcur;
-        left -= lenfromcur;
-        ++p;
-        continue;  // more?
-        
-      } else if (p->first > cur) {
-        // gap.. miss
-        loff_t next = p->first;
-        BufferHead *n = new BufferHead(this);
-	loff_t len = MIN(next - cur, left);
-        n->set_start(cur);
-	n->set_length(len);
-        oc->bh_add(this,n);
-	if (complete) {
-	  oc->mark_zero(n);
-	  hits[cur] = n;
-	  ldout(oc->cct, 20) << "map_read gap+complete+zero " << *n << dendl;
-	} else {
-	  missing[cur] = n;
-	  ldout(oc->cct, 20) << "map_read gap " << *n << dendl;
-	}
-        cur += MIN(left, n->length());
-        left -= MIN(left, n->length());
-        continue;    // more?
-      } else {
-        assert(0);
+      map<loff_t, BufferHead*>::iterator p = data_lower_bound(cur);
+      while (left > 0) {
+        // at end?
+        if (p == data.end()) {
+          // rest is a miss.
+          BufferHead *n = new BufferHead(this);
+          n->set_start(cur);
+          n->set_length(left);
+          oc->bh_add(this, n);
+	  if (complete) {
+	    oc->mark_zero(n);
+	    hits[cur] = n;
+	    ldout(oc->cct, 20) << "map_read miss+complete+zero " << left
+			       << " left, " << *n << dendl;
+	  } else {
+	    missing[cur] = n;
+	    ldout(oc->cct, 20) << "map_read miss " << left << " left, " << *n
+			       << dendl;
+	  }
+          cur += left;
+          assert(cur == static_cast<loff_t>(p_it.get_start() + p_it.get_len()));
+          break;  // no more.
+        }
+
+        if (p->first <= cur) {
+          // have it (or part of it)
+          BufferHead *e = p->second;
+          if (e->is_clean() || e->is_dirty() || e->is_tx() || e->is_zero()) {
+            hits[cur] = e;     // readable!
+            ldout(oc->cct, 20) << "map_read hit " << *e << dendl;
+          } else if (e->is_rx()) {
+            rx[cur] = e;       // missing, not readable.
+            ldout(oc->cct, 20) << "map_read rx " << *e << dendl;
+          } else if (e->is_error()) {
+	    errors[cur] = e;
+	    ldout(oc->cct, 20) << "map_read error " << *e << dendl;
+	  } else {
+	    assert(0);
+	  }
+
+          loff_t lenfromcur = MIN(e->end() - cur, left);
+          cur += lenfromcur;
+          left -= lenfromcur;
+          ++p;
+          continue;  // more?
+
+        } else if (p->first > cur) {
+          // gap.. miss
+          loff_t next = p->first;
+          BufferHead *n = new BufferHead(this);
+	  loff_t len = MIN(next - cur, left);
+          n->set_start(cur);
+	  n->set_length(len);
+          oc->bh_add(this,n);
+	  if (complete) {
+	    oc->mark_zero(n);
+	    hits[cur] = n;
+	    ldout(oc->cct, 20) << "map_read gap+complete+zero " << *n << dendl;
+	  } else {
+	    missing[cur] = n;
+	    ldout(oc->cct, 20) << "map_read gap " << *n << dendl;
+	  }
+          cur += MIN(left, n->length());
+          left -= MIN(left, n->length());
+          continue;    // more?
+        } else {
+          assert(0);
+        }
       }
     }
   }
@@ -805,6 +812,8 @@ void ObjectCacher::bh_read_finish(int64_t poolid, sobject_t oid, ceph_tid_t tid,
   finish_contexts(cct, ls, err);
   --reads_outstanding;
   read_cond.Signal();
+
+  trim();
 }
 
 
@@ -955,14 +964,14 @@ void ObjectCacher::flush(loff_t amount)
 }
 
 
-void ObjectCacher::trim(uint64_t extra_space)
+void ObjectCacher::trim()
 {
   assert(lock.is_locked());
   ldout(cct, 10) << "trim  start: bytes: max " << max_size << "  clean " << get_stat_clean()
 		 << ", objects: max " << max_objects << " current " << ob_lru.lru_get_size()
 		 << dendl;
 
-  while (get_stat_clean() > 0 && (uint64_t) (get_stat_clean() + get_stat_rx() + extra_space) > max_size) {
+  while (get_stat_clean() > 0 && (uint64_t) get_stat_clean() > max_size) {
     BufferHead *bh = static_cast<BufferHead*>(bh_lru_rest.lru_expire());
     if (!bh)
       break;
@@ -1024,6 +1033,40 @@ bool ObjectCacher::is_cached(ObjectSet *oset, vector<ObjectExtent>& extents, sna
  */
 int ObjectCacher::readx(OSDRead *rd, ObjectSet *oset, Context *onfinish)
 {
+  for (vector<ObjectExtent>::iterator ex_it = rd->extents.begin();
+       ex_it != rd->extents.end(); ++ex_it) {
+    uint64_t opos = ex_it->offset;
+    uint64_t olen = ex_it->length;
+    rd->pending_reads[ex_it->oid].insert(opos, olen);
+
+    // build a mapping table from object to buffer extents
+    vector<pair<uint64_t,uint64_t> >::iterator f_it =
+      ex_it->buffer_extents.begin();
+    uint64_t foff = 0;
+    uint64_t last_fpos = 0;
+    while (true) {
+      assert(last_fpos <= f_it->first);
+      last_fpos = f_it->first;
+
+      uint64_t len = MIN(f_it->second - foff, olen);
+      ldout(cct, 10) << "readx buffer mapping opos " << opos << "~" << olen
+		     << " frag " << f_it->first << "~" << f_it->second
+		     << " +" << foff << "~" << len << dendl;
+      rd->buffer_mappings[ex_it->oid][opos] = make_pair(f_it->first + foff, len);
+
+      opos += len;
+      foff += len;
+      if (foff == f_it->second) {
+	++f_it;
+	foff = 0;
+      }
+      if (f_it == ex_it->buffer_extents.end()) {
+	break;
+      }
+    }
+    assert(f_it == ex_it->buffer_extents.end());
+    assert(opos == ex_it->offset + ex_it->length);
+  }
   return _readx(rd, oset, onfinish, true);
 }
 
@@ -1031,29 +1074,37 @@ int ObjectCacher::_readx(OSDRead *rd, ObjectSet *oset, Context *onfinish,
 			 bool external_call)
 {
   assert(lock.is_locked());
-  bool success = true;
-  int error = 0;
-  list<BufferHead*> hit_ls;
-  uint64_t bytes_in_cache = 0;
+
   uint64_t bytes_missing = 0;
   uint64_t bytes_rx = 0;
   uint64_t total_bytes_read = 0;
-  map<uint64_t, bufferlist> stripe_map;  // final buffer offset -> substring
-
   for (vector<ObjectExtent>::iterator ex_it = rd->extents.begin();
-       ex_it != rd->extents.end();
-       ++ex_it) {
+       ex_it != rd->extents.end(); ++ex_it) {
     total_bytes_read += ex_it->length;
   }
 
+  bool retrying = false;
   for (vector<ObjectExtent>::iterator ex_it = rd->extents.begin();
        ex_it != rd->extents.end();
        ++ex_it) {
     ldout(cct, 10) << "readx " << *ex_it << dendl;
 
+    map<object_t, interval_set<uint64_t> >::iterator p_it =
+      rd->pending_reads.find(ex_it->oid);
+    if (p_it == rd->pending_reads.end()) {
+      // all reads have been processed for this extent
+      continue;
+    }
+
+    ldout(cct, 10) << "readx pending extents " << p_it->second << dendl;
+
+    BufferMapping &buffer_mapping = rd->buffer_mappings[ex_it->oid];
+    assert(!buffer_mapping.empty());
+
     // get Object cache
     sobject_t soid(ex_it->oid, rd->snap);
-    Object *o = get_object(soid, oset, ex_it->oloc, ex_it->truncate_size, oset->truncate_seq);
+    Object *o = get_object(soid, oset, ex_it->oloc, ex_it->truncate_size,
+			   oset->truncate_seq);
     touch_ob(o);
 
     // does not exist and no hits?
@@ -1116,7 +1167,7 @@ int ObjectCacher::_readx(OSDRead *rd, ObjectSet *oset, Context *onfinish,
 
     // map extent into bufferheads
     map<loff_t, BufferHead*> hits, missing, rx, errors;
-    o->map_read(rd, hits, missing, rx, errors);
+    o->map_read(rd, p_it->second, hits, missing, rx, errors);
     if (external_call) {
       // retry reading error buffers
       missing.insert(errors.begin(), errors.end());
@@ -1126,196 +1177,198 @@ int ObjectCacher::_readx(OSDRead *rd, ObjectSet *oset, Context *onfinish,
       // TODO: make read path not call _readx for every completion
       hits.insert(errors.begin(), errors.end());
     }
-    
+
     if (!missing.empty() || !rx.empty()) {
       // read missing
       for (map<loff_t, BufferHead*>::iterator bh_it = missing.begin();
            bh_it != missing.end();
            ++bh_it) {
-        loff_t clean = get_stat_clean() + get_stat_rx() +
-                       bh_it->second->length();
-	if (get_stat_rx() > 0 && static_cast<uint64_t>(clean) > max_size) {
-	  trim(bh_it->second->length());
+        bh_read(bh_it->second);
+	if (!retrying && onfinish != NULL) {
+          ldout(cct, 10) << "readx missed, waiting on " << *bh_it->second
+		         << " off " << bh_it->first << dendl;
+	  bh_it->second->waitfor_read[bh_it->first].push_back(
+	    new C_RetryRead(this, rd, oset, onfinish));
+	  retrying = true;
 	}
-	clean = get_stat_clean() + get_stat_rx() + bh_it->second->length();
-        if (get_stat_rx() > 0 && static_cast<uint64_t>(clean) > max_size) {
-          // cache is full -- wait for rx's to complete
-          ldout(cct, 10) << "readx missed, waiting on cache to free "
-                         << (clean - max_size) << " bytes" << dendl;
-          if (success) {
-            waitfor_read.push_back(new C_RetryRead(this, rd, oset, onfinish));
-          }
-          bh_remove(o, bh_it->second);
-          delete bh_it->second;
-        } else {
-          bh_read(bh_it->second);
-          if (success && onfinish) {
-            ldout(cct, 10) << "readx missed, waiting on " << *bh_it->second 
-                     << " off " << bh_it->first << dendl;
-	    bh_it->second->waitfor_read[bh_it->first].push_back( new C_RetryRead(this, rd, oset, onfinish) );
-          }
-        }
-	bytes_missing += bh_it->second->overlap_size(bh_it->first, ex_it->offset + ex_it->length);
-	success = false;
+        bytes_missing += bh_it->second->length();
       }
 
       // bump rx
       for (map<loff_t, BufferHead*>::iterator bh_it = rx.begin();
            bh_it != rx.end();
            ++bh_it) {
-        touch_bh(bh_it->second);        // bump in lru, so we don't lose it.
-        if (success && onfinish) {
-          ldout(cct, 10) << "readx missed, waiting on " << *bh_it->second 
-                   << " off " << bh_it->first << dendl;
-	  bh_it->second->waitfor_read[bh_it->first].push_back( new C_RetryRead(this, rd, oset, onfinish) );
-        }
-	bytes_rx += bh_it->second->overlap_size(bh_it->first, ex_it->offset + ex_it->length);
-	success = false;
-      }      
-
-      // Count the bytes that were available in the cache, so we can track partial hits
-      for (map<loff_t, BufferHead*>::iterator bh_it = hits.begin();
-           bh_it != hits.end();
-           ++bh_it) {
-	bytes_in_cache += bh_it->second->overlap_size(bh_it->first, ex_it->offset + ex_it->length);
+	// bump in lru, so we don't lose it.
+        touch_bh(bh_it->second);
+	if (!retrying && onfinish != NULL) {
+	  ldout(cct, 10) << "readx missed, waiting on " << *bh_it->second
+	 	         << " off " << bh_it->first << dendl;
+	  bh_it->second->waitfor_read[bh_it->first].push_back(
+	    new C_RetryRead(this, rd, oset, onfinish));
+	  retrying = true;
+	}
+	bytes_rx += bh_it->second->overlap_size(
+	  bh_it->first, ex_it->offset + ex_it->length);
       }
     } else {
       assert(!hits.empty());
+    }
 
-      // make a plain list
-      for (map<loff_t, BufferHead*>::iterator bh_it = hits.begin();
-           bh_it != hits.end();
-           ++bh_it) {
-	ldout(cct, 10) << "readx hit bh " << *bh_it->second << dendl;
-	if (bh_it->second->is_error() && bh_it->second->error)
-	  error = bh_it->second->error;
-        hit_ls.push_back(bh_it->second);
+    // copy all bh hits into the out buffer immediately before they
+    // (potentially) get expired from the cache
+    for (map<loff_t, BufferHead*>::iterator bh_it = hits.begin();
+         bh_it != hits.end(); ++bh_it) {
+      BufferHead *bh = bh_it->second;
+      ldout(cct, 10) << "readx hit bh " << *bh << dendl;
+      touch_bh(bh);
+
+      if (bh->is_error() && bh->error != 0 && rd->error == 0) {
+	rd->error = bh->error;
       }
-
-      // create reverse map of buffer offset -> object for the eventual result.
-      // this is over a single ObjectExtent, so we know that
-      //  - the bh's are contiguous
-      //  - the buffer frags need not be (and almost certainly aren't)
-      loff_t opos = ex_it->offset;
-      map<loff_t, BufferHead*>::iterator bh_it = hits.begin();
-      assert(bh_it->second->start() <= opos);
-      uint64_t bhoff = opos - bh_it->second->start();
-      vector<pair<uint64_t,uint64_t> >::iterator f_it = ex_it->buffer_extents.begin();
-      uint64_t foff = 0;
-      while (1) {
-        BufferHead *bh = bh_it->second;
-        assert(opos == (loff_t)(bh->start() + bhoff));
-
-        uint64_t len = MIN(f_it->second - foff, bh->length() - bhoff);
-        ldout(cct, 10) << "readx rmap opos " << opos
-		       << ": " << *bh << " +" << bhoff
-		       << " frag " << f_it->first << "~" << f_it->second << " +" << foff << "~" << len
-		       << dendl;
-
-	bufferlist bit;  // put substr here first, since substr_of clobbers, and
-	                 // we may get multiple bh's at this stripe_map position
-	if (bh->is_zero()) {
-	  bufferptr bp(len);
-	  bp.zero();
-	  stripe_map[f_it->first].push_back(bp);
-	} else {
-	  bit.substr_of(bh->bl,
-			opos - bh->start(),
-			len);
-	  stripe_map[f_it->first].claim_append(bit);
-	}
-
-	bytes_in_cache += len;
-        opos += len;
-        bhoff += len;
-        foff += len;
-        if (opos == bh->end()) {
-          ++bh_it;
-          bhoff = 0;
-        }
-        if (foff == f_it->second) {
-          ++f_it;
-          foff = 0;
-        }
-        if (bh_it == hits.end()) break;
-        if (f_it == ex_it->buffer_extents.end())
-	  break;
+      rd->bytes_read += read_buffer_head(*rd, *bh, buffer_mapping,
+					 &p_it->second);
+      if (p_it->second.empty()) {
+	rd->pending_reads.erase(p_it);
+	break;
       }
-      assert(f_it == ex_it->buffer_extents.end());
-      assert(opos == (loff_t)ex_it->offset + (loff_t)ex_it->length);
     }
   }
-  
-  // bump hits in lru
-  for (list<BufferHead*>::iterator bhit = hit_ls.begin();
-       bhit != hit_ls.end();
-       ++bhit) 
-    touch_bh(*bhit);
 
-  assert(bytes_in_cache + bytes_missing + bytes_rx == total_bytes_read);
+  trim();
 
-  if (!success) {
-    if (perfcounter && external_call) {
+  if (!retrying) {
+    assert(rd->pending_reads.size() == 0);
+    if (perfcounter != NULL && external_call) {
+      assert(rd->bytes_read == total_bytes_read);
       perfcounter->inc(l_objectcacher_data_read, total_bytes_read);
-      if (bytes_in_cache > 0) {
+      perfcounter->inc(l_objectcacher_cache_bytes_hit, total_bytes_read);
+      perfcounter->inc(l_objectcacher_cache_ops_hit);
+    }
+
+    uint64_t pos = assemble_read(*rd);
+    int ret = rd->error != 0 ? rd->error : pos;
+    ldout(cct, 20) << "readx done " << rd << " " << ret << dendl;
+
+    delete rd;
+    return ret;
+  } else {
+    assert(rd->bytes_read + bytes_missing + bytes_rx == total_bytes_read);
+    if (perfcounter != NULL && external_call) {
+      perfcounter->inc(l_objectcacher_data_read, total_bytes_read);
+      if (rd->bytes_read > 0) {
 	perfcounter->inc(l_objectcacher_cache_ops_partial_hit);
-	perfcounter->inc(l_objectcacher_cache_bytes_partial_hit, bytes_in_cache);
+	perfcounter->inc(l_objectcacher_cache_bytes_partial_hit,
+			 rd->bytes_read);
       } else {
 	perfcounter->inc(l_objectcacher_cache_ops_miss);
       }
       perfcounter->inc(l_objectcacher_cache_bytes_miss, bytes_missing);
       perfcounter->inc(l_objectcacher_cache_bytes_rx, bytes_rx);
     }
-    if (onfinish) {
+    if (onfinish != NULL) {
       ldout(cct, 20) << "readx defer " << rd << dendl;
     } else {
-      ldout(cct, 20) << "readx drop " << rd << " (no complete, but no waiter)" << dendl;
+      ldout(cct, 20) << "readx drop " << rd
+		     << " (not complete, but no waiter)" << dendl;
       delete rd;
     }
     return 0;  // wait!
   }
-  if (perfcounter && external_call) {
-    perfcounter->inc(l_objectcacher_data_read, total_bytes_read);
-    perfcounter->inc(l_objectcacher_cache_bytes_hit, total_bytes_read);
-    perfcounter->inc(l_objectcacher_cache_ops_hit);
-  }
-
-  // no misses... success!  do the read.
-  assert(!hit_ls.empty());
-  ldout(cct, 10) << "readx has all buffers" << dendl;
-  
-  // ok, assemble into result buffer.
-  uint64_t pos = 0;
-  if (rd->bl && !error) {
-    rd->bl->clear();
-    for (map<uint64_t,bufferlist>::iterator i = stripe_map.begin();
-	 i != stripe_map.end();
-	 ++i) {
-      assert(pos == i->first);
-      ldout(cct, 10) << "readx  adding buffer len " << i->second.length() << " at " << pos << dendl;
-      pos += i->second.length();
-      rd->bl->claim_append(i->second);
-      assert(rd->bl->length() == pos);
-    }
-    ldout(cct, 10) << "readx  result is " << rd->bl->length() << dendl;
-  } else {
-    ldout(cct, 10) << "readx  no bufferlist ptr (readahead?), done." << dendl;
-    map<uint64_t,bufferlist>::reverse_iterator i = stripe_map.rbegin();
-    pos = i->first + i->second.length();
-  }
-
-  // done with read.
-  int ret = error ? error : pos;
-  ldout(cct, 20) << "readx done " << rd << " " << ret << dendl;
-  assert(pos <= (uint64_t) INT_MAX);
-
-  delete rd;
-
-  trim();
-
-  return ret;
 }
 
+uint64_t ObjectCacher::read_buffer_head(OSDRead &rd, BufferHead &bh,
+					const BufferMapping &buffer_mapping,
+					interval_set<uint64_t> *pending_reads)
+{
+  // subtract bh from pending read interval
+  interval_set<uint64_t> bh_range;
+  bh_range.insert(bh.start(), bh.length());
+  interval_set<uint64_t> bh_intersect;
+  bh_intersect.intersection_of(*pending_reads, bh_range);
+  pending_reads->subtract(bh_intersect);
+
+  uint64_t bytes_read = 0;
+  for (interval_set<uint64_t>::const_iterator p_it = bh_intersect.begin();
+       p_it != bh_intersect.end(); ++p_it) {
+    // object offsets are continous within the mapping
+    ldout(cct, 20) << "readx pending interval " << *p_it << dendl;
+    uint64_t offset = p_it.get_start();
+    uint64_t length = p_it.get_len();
+
+    BufferMapping::const_iterator b_it = buffer_mapping.lower_bound(offset);
+    if (b_it != buffer_mapping.begin() &&
+         (b_it == buffer_mapping.end() || b_it->first > offset)) {
+      --b_it;
+    }
+    assert(b_it->first <= offset);
+
+    uint64_t opos = offset; // TODO: rename
+    uint64_t bhoff = opos - bh.start();
+    uint64_t foff = opos - b_it->first;
+    while (true) {
+      const pair<uint64_t, uint64_t> &frag = b_it->second;
+      uint64_t len = MIN(MIN(frag.second - foff, bh.length() - bhoff), length);
+      ldout(cct, 10) << "readx rmap opos " << opos << ":"
+  		   << bh << " +" << bhoff << "~" << len
+  		   << " frag " << frag.first << "~" << frag.second
+		   << " +" << foff << "~" << len << dendl;
+
+      if (rd.error == 0 && rd.bl != NULL) {
+        // put substr here first, since substr_of clobbers, and
+        // we may get multiple bh's at this stripe_map position
+        if (bh.is_zero()) {
+	  bufferptr bp(len);
+	  bp.zero();
+	  rd.stripe_map[frag.first + foff].push_back(bp);
+        } else {
+	  bufferlist bit;
+	  bit.substr_of(bh.bl, opos - bh.start(), len);
+	  rd.stripe_map[frag.first + foff].claim(bit);
+        }
+      }
+
+      bytes_read += len;
+      opos += len;
+      bhoff += len;
+      foff += len;
+      if (foff == frag.second) {
+        ++b_it;
+        foff = 0;
+      }
+      if (opos == offset + length || b_it == buffer_mapping.end()) {
+        break;
+      }
+    }
+  }
+  return bytes_read;
+}
+
+uint64_t ObjectCacher::assemble_read(OSDRead &rd)
+{
+  ldout(cct, 10) << "readx has all buffers" << dendl;
+
+  // ok, assemble into result buffer.
+  uint64_t pos = 0;
+  if (rd.bl != NULL && rd.error == 0) {
+    rd.bl->clear();
+    for (map<uint64_t,bufferlist>::iterator i = rd.stripe_map.begin();
+	 i != rd.stripe_map.end(); ++i) {
+      assert(pos == i->first);
+      ldout(cct, 10) << "readx  adding buffer len " << i->second.length()
+		     << " at " << pos << dendl;
+      pos += i->second.length();
+      rd.bl->claim_append(i->second);
+      assert(rd.bl->length() == pos);
+    }
+    ldout(cct, 10) << "readx  result is " << rd.bl->length() << dendl;
+  } else {
+    ldout(cct, 10) << "readx  no bufferlist ptr (readahead?), done." << dendl;
+    map<uint64_t,bufferlist>::reverse_iterator i = rd.stripe_map.rbegin();
+    pos = i->first + i->second.length();
+  }
+  assert(pos <= static_cast<uint64_t>(INT_MAX));
+  return pos;
+}
 
 int ObjectCacher::writex(OSDWrite *wr, ObjectSet *oset, Mutex& wait_on_lock,
 			 Context *onfreespace)
