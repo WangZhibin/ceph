@@ -1422,8 +1422,6 @@ void Pipe::stop()
   state = STATE_CLOSED;
   state_closed.set(1);
   cond.Signal();
-  if (delay_thread)
-    delay_thread->stop();
   shutdown_socket();
 }
 
