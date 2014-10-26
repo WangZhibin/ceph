@@ -8297,12 +8297,11 @@ void OSD::ShardedOpWQ::_enqueue(pair<PGRef, OpRequestRef> item) {
   unsigned cost = item.second->get_req()->get_cost();
   sdata->sdata_op_ordering_lock.Lock();
  
+  entity_inst_t entity = item.second->get_req()->get_source_inst();
   if (priority >= CEPH_MSG_PRIO_LOW)
-    sdata->pqueue.enqueue_strict(
-      item.second->get_req()->get_source_inst(), priority, item);
+    sdata->pqueue.enqueue_strict(entity, priority, item);
   else
-    sdata->pqueue.enqueue(item.second->get_req()->get_source_inst(),
-      priority, cost, item);
+    sdata->pqueue.enqueue(entity, priority, cost, item);
   sdata->sdata_op_ordering_lock.Unlock();
 
   sdata->sdata_lock.Lock();
@@ -8325,12 +8324,12 @@ void OSD::ShardedOpWQ::_enqueue_front(pair<PGRef, OpRequestRef> item) {
   }
   unsigned priority = item.second->get_req()->get_priority();
   unsigned cost = item.second->get_req()->get_cost();
+
+  entity_inst_t entity = item.second->get_req()->get_source_inst();
   if (priority >= CEPH_MSG_PRIO_LOW)
-    sdata->pqueue.enqueue_strict_front(
-      item.second->get_req()->get_source_inst(),priority, item);
+    sdata->pqueue.enqueue_strict_front(entity, priority, item);
   else
-    sdata->pqueue.enqueue_front(item.second->get_req()->get_source_inst(),
-      priority, cost, item);
+    sdata->pqueue.enqueue_front(entity, priority, cost, item);
 
   sdata->sdata_op_ordering_lock.Unlock();
   sdata->sdata_lock.Lock();

@@ -139,8 +139,9 @@ class DispatchQueue {
     Mutex::Locker l(lock);
     if (stop)
       return;
+    uint64_t i = 0;
     mqueue.enqueue_strict(
-      0,
+      i,
       CEPH_MSG_PRIO_HIGHEST,
       QueueItem(D_CONNECT, con));
     cond.Signal();
@@ -149,8 +150,9 @@ class DispatchQueue {
     Mutex::Locker l(lock);
     if (stop)
       return;
+    uint64_t i = 0;
     mqueue.enqueue_strict(
-      0,
+      i,
       CEPH_MSG_PRIO_HIGHEST,
       QueueItem(D_ACCEPT, con));
     cond.Signal();
@@ -159,8 +161,9 @@ class DispatchQueue {
     Mutex::Locker l(lock);
     if (stop)
       return;
+    uint64_t i = 0;
     mqueue.enqueue_strict(
-      0,
+      i,
       CEPH_MSG_PRIO_HIGHEST,
       QueueItem(D_BAD_REMOTE_RESET, con));
     cond.Signal();
@@ -169,8 +172,9 @@ class DispatchQueue {
     Mutex::Locker l(lock);
     if (stop)
       return;
+    uint64_t i = 0;
     mqueue.enqueue_strict(
-      0,
+      i,
       CEPH_MSG_PRIO_HIGHEST,
       QueueItem(D_BAD_RESET, con));
     cond.Signal();

@@ -125,12 +125,13 @@ void DispatchQueue::run_local_delivery()
     } else {
       Mutex::Locker l(lock);
       add_arrival(m);
+      uint64_t i = 0;
       if (priority >= CEPH_MSG_PRIO_LOW) {
         mqueue.enqueue_strict(
-            0, priority, QueueItem(m));
+            i, priority, QueueItem(m));
       } else {
         mqueue.enqueue(
-            0, priority, m->get_cost(), QueueItem(m));
+            i, priority, m->get_cost(), QueueItem(m));
       }
       cond.Signal();
     }

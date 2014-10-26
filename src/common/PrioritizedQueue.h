@@ -113,13 +113,13 @@ class PrioritizedQueue {
       else
 	tokens = 0;
     }
-    void enqueue(K cl, unsigned cost, T item) {
+    void enqueue(K &cl, unsigned cost, T item) {
       q[cl].push_back(make_pair(cost, item));
       if (cur == q.end())
 	cur = q.begin();
       size++;
     }
-    void enqueue_front(K cl, unsigned cost, T item) {
+    void enqueue_front(K &cl, unsigned cost, T item) {
       q[cl].push_front(make_pair(cost, item));
       if (cur == q.end())
 	cur = q.begin();
@@ -301,15 +301,15 @@ public:
     }
   }
 
-  void enqueue_strict(K cl, unsigned priority, T item) {
+  void enqueue_strict(K &cl, unsigned priority, T item) {
     high_queue[priority].enqueue(cl, 0, item);
   }
 
-  void enqueue_strict_front(K cl, unsigned priority, T item) {
+  void enqueue_strict_front(K &cl, unsigned priority, T item) {
     high_queue[priority].enqueue_front(cl, 0, item);
   }
 
-  void enqueue(K cl, unsigned priority, unsigned cost, T item) {
+  void enqueue(K &cl, unsigned priority, unsigned cost, T item) {
     if (cost < min_cost)
       cost = min_cost;
     if (cost > max_tokens_per_subqueue)
@@ -317,7 +317,7 @@ public:
     create_queue(priority)->enqueue(cl, cost, item);
   }
 
-  void enqueue_front(K cl, unsigned priority, unsigned cost, T item) {
+  void enqueue_front(K &cl, unsigned priority, unsigned cost, T item) {
     if (cost < min_cost)
       cost = min_cost;
     if (cost > max_tokens_per_subqueue)
