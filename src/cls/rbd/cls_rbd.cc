@@ -1519,7 +1519,7 @@ int copyup(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
   if (cls_cxx_stat(hctx, NULL, NULL) == 0)
     return 0;
   CLS_LOG(20, "copyup: writing length %d\n", in->length());
-  return cls_cxx_write(hctx, 0, in->length(), in);
+  return cls_cxx_write(hctx, (int64_t)0, in->length(), in);
 }
 
 
@@ -1602,7 +1602,7 @@ int set_id(cls_method_context_t hctx, bufferlist *in, bufferlist *out)
 
   bufferlist write_bl;
   ::encode(id, write_bl);
-  return cls_cxx_write(hctx, 0, write_bl.length(), &write_bl);
+  return cls_cxx_write(hctx, (int64_t)0, write_bl.length(), &write_bl);
 }
 
 /*********************** methods for rbd_directory ***********************/

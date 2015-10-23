@@ -172,6 +172,20 @@ ceph_test_cls_hello_LDADD = \
 ceph_test_cls_hello_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 bin_DEBUGPROGRAMS += ceph_test_cls_hello
 
+ceph_test_cls_compound_SOURCES = test/cls_compound/test_cls_compound.cc
+ceph_test_cls_compound_LDADD = \
+        $(LIBRADOS) libcls_compound_client.la  $(CRYPTO_LIBS) \
+        $(UNITTEST_LDADD) $(CEPH_GLOBAL) $(RADOS_TEST_LDADD)
+ceph_test_cls_compound_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+bin_DEBUGPROGRAMS += ceph_test_cls_compound
+
+ceph_test_cls_dir_compound_SOURCES = test/cls_compound/test_cls_dir_compound.cc
+ceph_test_cls_dir_compound_LDADD = \
+        $(LIBRADOS) libcls_compound_client.la  $(CRYPTO_LIBS) \
+        $(UNITTEST_LDADD) $(CEPH_GLOBAL) $(RADOS_TEST_LDADD)
+ceph_test_cls_dir_compound_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+bin_DEBUGPROGRAMS += ceph_test_cls_dir_compound
+
 ceph_test_rados_api_cmd_SOURCES = test/librados/cmd.cc
 ceph_test_rados_api_cmd_LDADD = \
 	$(LIBCOMMON) $(LIBRADOS) $(CRYPTO_LIBS) \

@@ -38,6 +38,10 @@ libcls_rgw_client_la_SOURCES = \
 noinst_LTLIBRARIES += libcls_rgw_client.la
 DENCODER_DEPS += libcls_rgw_client.la
 
+libcls_compound_client_la_SOURCES = cls/compound/cls_compound_client.cc \
+	cls/compound/cls_dir_compound_client.cc
+noinst_LTLIBRARIES += libcls_compound_client.la
+
 libcls_rbd_client_la_SOURCES = cls/rbd/cls_rbd_client.cc
 noinst_LTLIBRARIES += libcls_rbd_client.la
 
@@ -54,6 +58,8 @@ noinst_HEADERS += \
 	cls/lock/cls_lock_client.h \
 	cls/rbd/cls_rbd.h \
 	cls/rbd/cls_rbd_client.h \
+	cls/compound/cls_compound_client.h \
+	cls/compound/cls_dir_compound_client.h \
 	cls/refcount/cls_refcount_ops.h \
 	cls/refcount/cls_refcount_client.h \
 	cls/version/cls_version_types.h \
