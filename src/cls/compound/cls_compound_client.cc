@@ -12,10 +12,6 @@ using namespace librados::cls_compound_client;
 using namespace librados;
 
 const std::map<std::string, const struct CompoundInfo>::value_type compound_pools_init[] = {
-  std::map<std::string, const struct CompoundInfo>::value_type("YopApp", CompoundInfo("YopApp", (4096 * 256), (2 * 1024 * 1024) ) ),
-  std::map<std::string, const struct CompoundInfo>::value_type("LS1", CompoundInfo("LS1", (4096 * 256), (2 * 1024 * 1024) ) ),
-  std::map<std::string, const struct CompoundInfo>::value_type("VideoAndImageStorage", 
-		CompoundInfo("VideoAndImageStorage", (4096 * 256), (2 * 1024 * 1024) ) ),
   std::map<std::string, const struct CompoundInfo>::value_type("VideoUploadTest", CompoundInfo("VideoUploadTest", (4096 * 256), (2 * 1024 * 1024) ) )
 }; //never change these digital
 
