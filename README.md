@@ -1,3 +1,7 @@
+Branch omap_indexed_compound is created, adding cls/compound, for massive small file storage.
+We store multiple small file into one object, and index(k/v pair, <small-file-name, offset+size>) is saved as that object' omap. When writing/reading small file, we can use hash+mod or directory-prefixed  to locate object, which contains small-file's data.
+
+
 ============================================
 Ceph - a scalable distributed storage system
 ============================================
