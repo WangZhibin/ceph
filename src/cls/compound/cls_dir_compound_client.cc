@@ -67,8 +67,7 @@ int DirCompoundIoCtx::PrepareWriteData(const std::string& oid, const bufferlist&
   std::string filename;
   cb_(oid, path, filename);
   if (filename.empty()) {
-    return -1;
-    //TODO:directly using native librados interface, or hash_compound ?
+    return COMPOUND_DIR_FILE_NAME_ERR;
   }
 
   size_t bl_len = bl.length();
@@ -99,8 +98,8 @@ int DirCompoundIoCtx::PrepareWriteData(const std::string& oid, const bufferlist&
 int DirCompoundIoCtx::Write(const std::string& oid, bufferlist& bl, uint64_t off, int create_time) {
   list<std::pair<std::string, bufferlist> > write_data;
   int r = PrepareWriteData(oid, bl, off, create_time, write_data);
-  if (r < 0) {
-    return r;
+  if (r == COMPOUND_DIR_FILE_NAME_ERR) {
+    return io_ctx_.write(oid, bl, bl.length(), off); //use native method write
   }
 
   list<std::pair<std::string, bufferlist> >::iterator iter = write_data.begin();
@@ -128,8 +127,12 @@ int DirCompoundIoCtx::BatchWriteFullObj(const String2BufferlistHMap& oid2data, c
     String2IntHMap::const_iterator ct_iter = oid2create_time.find(iter->first);
     int create_time = (ct_iter != oid2create_time.end()) ? ct_iter->second : GetCurrentTime(); 
     r = PrepareWriteData(iter->first, iter->second, 0, create_time, write_data);
-    if (r < 0) {
-      return r;
+    if (r == COMPOUND_DIR_FILE_NAME_ERR) {
+      bufferlist tmp_bl(iter->second);
+      r = io_ctx_.write_full(iter->first, tmp_bl); //use native method write
+      if (r < 0) {
+        return r;
+      }
     }
   }
   
@@ -147,7 +150,7 @@ int DirCompoundIoCtx::BatchWriteFullObj(const String2BufferlistHMap& oid2data, c
     bufferlist out_bl;
     r = io_ctx_.exec(iter->first, "compound", "bth_apd_set_xatr", iter->second, out_bl);
     if (r != 0) {
-      return r;
+      return r; //can't exactly know which failed
     }
   }
   return 0;
@@ -171,8 +174,7 @@ int DirCompoundIoCtx::WriteFinish(const std::string& oid, uint64_t total_size, i
   std::string filename;
   cb_(oid, path, filename);
   if (filename.empty()) {
-    return -1;
-    //TODO
+    return 0; //do nothing
   }
 
   for (int idx = 0; idx < num; ++idx) {
@@ -218,8 +220,11 @@ int DirCompoundIoCtx::Read(const std::string& oid, bufferlist& bl, size_t len, u
   std::string filename;
   cb_(oid, path, filename);
   if (filename.empty()) {
-    return -1;
-    //TODO
+    int r = io_ctx_.read(oid, bl, len, off); //use native method write
+    if (r < 0) {
+      return r;
+    }
+    return 0;
   }
 
   uint64_t rd_off = off;
@@ -285,9 +290,18 @@ int DirCompoundIoCtx::ReadFullObj(const std::string& oid, bufferlist& bl, int* c
   std::string path;
   std::string filename;
   cb_(oid, path, filename);
-  if (filename.empty()) {
-    return -1;
-    //TODO
+  if (filename.empty()) { //use native method write
+    uint64_t obj_size;
+    time_t c_time;
+    int r = io_ctx_.stat(oid, &obj_size, &c_time);
+    if (r < 0) {
+      return r;
+    }
+    r = io_ctx_.read(oid, bl, obj_size, 0);
+    if (r < 0) {
+      return r;
+    }
+    return 0;
   }
 
   while(idx < num) {
@@ -331,9 +345,15 @@ int DirCompoundIoCtx::Stat(const std::string& oid, uint64_t *psize, time_t *pmti
   std::string path;
   std::string filename;
   cb_(oid, path, filename);
-  if (filename.empty()) {
-    return -1;
-    //TODO
+  if (filename.empty()) { //use native method write
+    int r = io_ctx_.stat(oid, psize, pmtime);
+    if (r < 0) {
+      return r;
+    }
+    if (meta) {
+      meta->stripe_num_ = 0;
+    }
+    return 0;
   }
 
   int idx = 0;
@@ -379,9 +399,8 @@ int DirCompoundIoCtx::Remove(const std::string& oid) {
   std::string path;
   std::string filename;
   cb_(oid, path, filename);
-  if (filename.empty()) {
-    return -1;
-    //TODO
+  if (filename.empty()) { //use native method write
+    return io_ctx_.remove(oid);
   }
 
   for (int idx = 0; idx < meta.stripe_num_; ++idx) {
@@ -460,7 +479,6 @@ std::string DirCompoundIoCtx::GetFirstCompoundObjId(const std::string& oid) {
   cb_(oid, path, filename);
   if (filename.empty()) {
     return oid;
-    //TODO
   }
 
   int idx = 0;
@@ -485,8 +503,7 @@ int DirCompoundIoCtx::GetStripeCompoundInfo(const std::string& oid, std::vector<
   std::string filename;
   cb_(oid, path, filename);
   if (filename.empty()) {
-    return -1;
-    //TODO
+    return COMPOUND_DIR_FILE_NAME_ERR;
   }
   
   for (int idx = 0; idx < meta.stripe_num_; ++idx) {
